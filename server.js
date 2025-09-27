@@ -7,9 +7,17 @@ dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
+
+// WebSocket server
 const wss = new WebSocketServer({ server });
 
+// Map to store connected clients
 const clients = new Map();
+
+// Health check endpoint for Railway
+app.get("/", (req, res) => {
+  res.send("✅ Blockchat relay is running!");
+});
 
 wss.on("connection", (ws) => {
   console.log("✅ New client connected");
@@ -26,7 +34,6 @@ wss.on("connection", (ws) => {
           clients.set(myId, ws);
           console.log(`🟢 Registered client: ${myId}`);
 
-          // 👇 Send confirmation back to client
           ws.send(JSON.stringify({ type: "registered", id: myId }));
           break;
 
@@ -40,7 +47,9 @@ wss.on("connection", (ws) => {
           const recipient = clients.get(data.to);
           if (recipient) {
             recipient.send(JSON.stringify(data));
-            console.log(`📨 Relayed ${data.type} from ${data.from} to ${data.to}`);
+            console.log(
+              `📨 Relayed ${data.type} from ${data.from} to ${data.to}`
+            );
           }
           break;
 
@@ -60,6 +69,7 @@ wss.on("connection", (ws) => {
   });
 });
 
+// Use Railway port or fallback
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
   console.log(`🚀 Relay running on port ${PORT}`);
