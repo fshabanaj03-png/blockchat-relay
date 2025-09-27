@@ -1,11 +1,18 @@
 {
   "name": "blockchat-relay",
   "version": "1.0.0",
+  "description": "WebSocket relay server for BlockVault Chat",
   "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "ws": "^8.18.3"
+    "express": "^4.18.2",
+    "ws": "^8.15.1",
+    "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
