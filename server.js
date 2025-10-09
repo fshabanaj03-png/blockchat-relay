@@ -3,6 +3,10 @@ import http from "http";
 import { WebSocketServer } from "ws";
 import dotenv from "dotenv";
 import { v4 as uuidv4 } from "uuid";
+import cors from "cors";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
 
 dotenv.config();
 
@@ -11,12 +15,60 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 const clients = new Map();
 
-// Health check endpoint for Railway
+// ─────────────── CORS FIX ───────────────
+const allowedOrigins = [
+  "https://preview--block-vault-chat.lovable.app",
+  "https://block-vault-chat.lovable.app",
+  "http://localhost:5173",
+  "http://localhost:3000"
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("CORS not allowed for this origin"));
+    }
+  },
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type"],
+}));
+
+// ─────────────── Health Check ───────────────
 app.get("/", (req, res) => {
   res.send("✅ BlockVault Relay is live and stable!");
 });
 
-// Broadcast helper
+// ─────────────── File Upload Setup ───────────────
+const uploadDir = path.join(process.cwd(), "uploads");
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => {
+    const uniqueName = `${Date.now()}_${file.originalname}`;
+    cb(null, uniqueName);
+  },
+});
+
+const upload = multer({ storage });
+
+// Upload route
+app.post("/upload", upload.single("file"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "No file uploaded" });
+  }
+
+  const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
+  console.log(`📁 File uploaded: ${fileUrl}`);
+  res.json({ url: fileUrl });
+});
+
+// Serve uploaded files
+app.use("/uploads", express.static(uploadDir));
+
+// ─────────────── Broadcast Helper ───────────────
 const sendToClient = (id, payload) => {
   const ws = clients.get(id);
   if (ws && ws.readyState === ws.OPEN) {
@@ -27,6 +79,7 @@ const sendToClient = (id, payload) => {
   }
 };
 
+// ─────────────── WebSocket Logic ───────────────
 wss.on("connection", (ws) => {
   console.log("✅ New client connected");
   let myId = null;
@@ -59,14 +112,13 @@ wss.on("connection", (ws) => {
         case "call-decline":
         case "sdp-offer":
         case "sdp-answer":
-          if (!data.callId) data.callId = uuidv4(); // Ensure callId
+          if (!data.callId) data.callId = uuidv4();
           sendToClient(data.to, data);
           console.log(`[CALL] ${data.type} (${data.callId}) from ${data.from} → ${data.to}`);
           break;
 
         // ─────────────── Presence ───────────────
         case "presence":
-          // Optional: ignore or handle later
           console.log(`[RELAY] Presence update from ${data.from}`);
           break;
 
