@@ -1,74 +1,79 @@
+// server.js
 import express from "express";
 import http from "http";
 import { WebSocketServer } from "ws";
 import dotenv from "dotenv";
-import { v4 as uuidv4 } from "uuid";
 import cors from "cors";
 import multer from "multer";
 import path from "path";
-import fs from "fs";
+import { fileURLToPath } from "url";
+import { v4 as uuidv4 } from "uuid";
 
 dotenv.config();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ---------- Config ----------
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
-const clients = new Map();
 
-// ─────────────── CORS FIX ───────────────
+// IMPORTANT: set your public base URL (Railway URL or your custom domain)
+const RELAY_BASE_URL =
+  process.env.PUBLIC_BASE_URL ||
+  "https://blockchat-relay-production.up.railway.app";
+
+// Allow only your frontends to call this server
 const allowedOrigins = [
   "https://preview--block-vault-chat.lovable.app",
   "https://block-vault-chat.lovable.app",
+  "https://preview--blockvault-chat.lovable.app", // safety alias
+  "https://blockvault-chat.lovable.app",           // safety alias
   "http://localhost:5173",
-  "http://localhost:3000"
+  "http://localhost:3000",
 ];
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error("CORS not allowed for this origin"));
-    }
-  },
-  methods: ["GET", "POST"],
-  allowedHeaders: ["Content-Type"],
-}));
+app.use(
+  cors({
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
+app.use(express.json());
 
-// ─────────────── Health Check ───────────────
-app.get("/", (req, res) => {
+// ---------- Static uploads ----------
+const uploadsDir = path.join(__dirname, "uploads");
+app.use("/uploads", express.static(uploadsDir));
+
+// ---------- Health ----------
+app.get("/", (_req, res) => {
   res.send("✅ BlockVault Relay is live and stable!");
 });
 
-// ─────────────── File Upload Setup ───────────────
-const uploadDir = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
-
+// ---------- Multer storage for uploads ----------
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const uniqueName = `${Date.now()}_${file.originalname}`;
-    cb(null, uniqueName);
+  destination: (_req, _file, cb) => cb(null, uploadsDir),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname || "");
+    cb(null, `${Date.now()}_${uuidv4()}${ext || ""}`);
   },
 });
-
 const upload = multer({ storage });
 
-// Upload route
+// Upload endpoint (returns absolute HTTPS URL)
 app.post("/upload", upload.single("file"), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: "No file uploaded" });
   }
-
-  const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
-  console.log(`📁 File uploaded: ${fileUrl}`);
-  res.json({ url: fileUrl });
+  const fileUrl = `${RELAY_BASE_URL}/uploads/${req.file.filename}`;
+  return res.json({ url: fileUrl, name: req.file.originalname });
 });
 
-// Serve uploaded files
-app.use("/uploads", express.static(uploadDir));
+// ---------- WebSocket relay ----------
+const clients = new Map(); // id -> ws
 
-// ─────────────── Broadcast Helper ───────────────
 const sendToClient = (id, payload) => {
   const ws = clients.get(id);
   if (ws && ws.readyState === ws.OPEN) {
@@ -79,7 +84,6 @@ const sendToClient = (id, payload) => {
   }
 };
 
-// ─────────────── WebSocket Logic ───────────────
 wss.on("connection", (ws) => {
   console.log("✅ New client connected");
   let myId = null;
@@ -89,45 +93,43 @@ wss.on("connection", (ws) => {
       const data = JSON.parse(msg);
 
       switch (data.type) {
-        // ─────────────── Register Client ───────────────
-        case "register":
+        case "register": {
           myId = data.id;
           clients.set(myId, ws);
           console.log(`🟢 Registered client: ${myId}`);
           ws.send(JSON.stringify({ type: "registered", id: myId }));
           break;
+        }
 
-        // ─────────────── Chat Message ───────────────
-        case "message":
+        // Chat
+        case "message": {
           sendToClient(data.to, data);
           break;
+        }
 
-        // ─────────────── Call Signaling ───────────────
-        case "call-offer":
-        case "call-answer":
-        case "ice-candidate":
-        case "call-end":
+        // Call signaling
         case "call-request":
         case "call-accept":
         case "call-decline":
+        case "call-offer":
+        case "call-answer":
         case "sdp-offer":
         case "sdp-answer":
+        case "ice-candidate":
+        case "call-end": {
           if (!data.callId) data.callId = uuidv4();
           sendToClient(data.to, data);
-          console.log(`[CALL] ${data.type} (${data.callId}) from ${data.from} → ${data.to}`);
+          console.log(`[CALL] ${data.type} (${data.callId}) ${data.from} → ${data.to}`);
           break;
+        }
 
-        // ─────────────── Presence ───────────────
+        // Optional
         case "presence":
-          console.log(`[RELAY] Presence update from ${data.from}`);
+        case "ack": {
+          console.log(`[RELAY] ${data.type} from ${data.from}`);
           break;
+        }
 
-        // ─────────────── Acknowledgments ───────────────
-        case "ack":
-          console.log(`[RELAY] ACK from ${data.from} for ${data.callId || "unknown call"}`);
-          break;
-
-        // ─────────────── Unknown ───────────────
         default:
           console.log(`⚠️ Unknown message type: ${data.type}`);
       }
@@ -144,7 +146,7 @@ wss.on("connection", (ws) => {
   });
 });
 
-// ─────────────── Start Server ───────────────
+// ---------- Start ----------
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
   console.log(`🚀 BlockVault Relay running on port ${PORT}`);
