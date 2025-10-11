@@ -1,122 +1,116 @@
-// 🌐 FINAL BlockVault Relay Server — HTTPS/WSS-ready for Railway
-const fs = require("fs");
-const path = require("path");
-const http = require("http");
-const https = require("https");
-const express = require("express");
-const WebSocket = require("ws");
-const multer = require("multer");
-const cors = require("cors");
-const crypto = require("crypto");
+// server.js
+import express from "express";
+import http from "http";
+import { WebSocketServer } from "ws";
+import cors from "cors";
 
 const app = express();
-app.enable("trust proxy");
 
-// 🧩 Generate unique IDs
-function uuidv4() {
-  return crypto.randomUUID();
-}
+// Middleware
+app.use(express.json());
+app.use(cors());
 
-// ✅ Allow Lovable + local origins
+// Health check
+app.get("/", (req, res) => {
+  res.send("✅ BlockVault Relay is running");
+});
+
+// HTTP + WS server
+const server = http.createServer(app);
+
+// ✅ Allowable frontend origins
 const allowedOrigins = [
   "https://preview--block-vault-chat.lovable.app",
   "https://block-vault-chat.lovable.app",
+  "https://lovable.app",
   "https://lovable.dev",
   "https://preview.lovable.dev",
+  "https://*.lovable.app",
   "http://localhost:5173",
   "http://localhost:3000"
 ];
 
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      if (!origin || allowedOrigins.includes(origin)) cb(null, true);
-      else {
-        console.log("❌ Blocked CORS origin:", origin);
-        cb(new Error("CORS not allowed"));
-      }
-    },
-    credentials: true,
-  })
-);
-app.use(express.json());
-
-// 🧠 Redirect HTTP → HTTPS
-app.use((req, res, next) => {
-  if (req.headers["x-forwarded-proto"] === "http") {
-    return res.redirect("https://" + req.headers.host + req.url);
-  }
-  next();
-});
-
-// 📂 File uploads
-const uploadDir = path.join(__dirname, "uploads");
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
-
-const storage = multer.diskStorage({
-  destination: (_, __, cb) => cb(null, uploadDir),
-  filename: (_, file, cb) => {
-    const safeName = file.originalname.replace(/\s+/g, "_");
-    cb(null, `${Date.now()}_${safeName}`);
-  },
-});
-const upload = multer({ storage });
-
-app.post("/upload", upload.single("file"), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-  const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
-  console.log("✅ File uploaded:", fileUrl);
-  res.json({ url: fileUrl });
-});
-app.use("/uploads", express.static(uploadDir));
-
-// 🧩 HTTP(S) server (Railway auto-SSL)
-const server = http.createServer(app);
-const wss = new WebSocket.Server({
+// ✅ Create WebSocket Server with origin verification
+const wss = new WebSocketServer({
   server,
   verifyClient: (info, done) => {
     const origin = info.origin;
-    if (!origin || allowedOrigins.includes(origin)) done(true);
-    else {
+    console.log("🌍 Incoming WS origin:", origin);
+
+    // Allow if origin is null (sometimes from browser extensions) or matches allowed list
+    if (
+      !origin ||
+      allowedOrigins.some(o => origin.includes(o.replace("https://", "")))
+    ) {
+      done(true);
+    } else {
       console.log("🚫 Rejected WebSocket from:", origin);
       done(false, 403, "Forbidden");
     }
-  },
+  }
 });
 
+// ✅ Track clients
 const clients = new Map();
 
 wss.on("connection", (ws) => {
   console.log("🔗 WebSocket client connected");
-  let id = null;
 
-  ws.on("message", (msg) => {
+  ws.on("message", (message) => {
     try {
-      const data = JSON.parse(msg);
+      const data = JSON.parse(message);
+
+      // ✅ Register user
       if (data.type === "register") {
-        id = data.id;
-        clients.set(id, ws);
-        console.log(`✅ Registered client: ${id}`);
-      } else if (data.to && clients.has(data.to)) {
-        clients.get(data.to).send(JSON.stringify(data));
-        console.log(`📨 ${data.type} from ${data.from} → ${data.to}`);
+        clients.set(data.address, ws);
+        console.log(`🟢 Registered client: ${data.address}`);
+        return;
+      }
+
+      // ✅ Handle messages between users
+      if (data.type === "message" && data.to) {
+        const receiver = clients.get(data.to);
+        if (receiver && receiver.readyState === receiver.OPEN) {
+          receiver.send(JSON.stringify(data));
+          console.log(`📨 Message from ${data.from} to ${data.to}`);
+        } else {
+          console.log(`⚠️ Receiver ${data.to} not connected`);
+        }
+        return;
+      }
+
+      // ✅ Handle call events (offer, answer, ice)
+      if (["call-offer", "call-answer", "ice-candidate"].includes(data.type)) {
+        const receiver = clients.get(data.to);
+        if (receiver && receiver.readyState === receiver.OPEN) {
+          receiver.send(JSON.stringify(data));
+          console.log(`📞 ${data.type} sent from ${data.from} to ${data.to}`);
+        } else {
+          console.log(`⚠️ Call target ${data.to} not connected`);
+        }
       }
     } catch (err) {
-      console.error("❌ Parse error:", err);
+      console.error("❌ Error handling message:", err);
     }
   });
 
   ws.on("close", () => {
-    if (id) clients.delete(id);
-    console.log(`🔴 Disconnected: ${id}`);
+    for (const [address, socket] of clients.entries()) {
+      if (socket === ws) {
+        clients.delete(address);
+        console.log(`🔴 Disconnected: ${address}`);
+        break;
+      }
+    }
   });
 
   ws.on("error", (err) => {
-    console.error("⚠️ WebSocket error:", err.message);
+    console.error("⚡ WebSocket error:", err);
   });
 });
 
+// ✅ Start server
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
-  console.log(`🚀 Relay running on port ${PORT}`);
+  console.log(`🚀 BlockVault Relay running on port ${PORT}`);
 });
