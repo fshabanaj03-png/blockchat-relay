@@ -1,5 +1,5 @@
 // ------------------------
-// 🌐 BlockVault Relay Server
+// 🌐 BlockVault Relay Server (Final Version)
 // ------------------------
 const express = require("express");
 const http = require("http");
@@ -10,7 +10,9 @@ const fs = require("fs");
 const cors = require("cors");
 const crypto = require("crypto");
 
-// Built-in UUID generator (no external uuid package)
+// ------------------------
+// 🪪 Generate UUID safely
+// ------------------------
 function uuidv4() {
   return crypto.randomUUID();
 }
@@ -19,7 +21,7 @@ const app = express();
 const server = http.createServer(app);
 
 // ------------------------
-// ✅ Allowed Origins (Expanded for Lovable + Local)
+// 🌍 Allowed Origins (Includes all Lovable URLs + local)
 // ------------------------
 const allowedOrigins = [
   "https://preview--block-vault-chat.lovable.app",
@@ -32,7 +34,18 @@ const allowedOrigins = [
 ];
 
 // ------------------------
-// 🌍 CORS Setup
+// 🧩 Force HTTPS for WSS (required by Lovable + Railway)
+// ------------------------
+app.enable("trust proxy");
+app.use((req, res, next) => {
+  if (req.headers["x-forwarded-proto"] === "http") {
+    return res.redirect("https://" + req.headers.host + req.url);
+  }
+  next();
+});
+
+// ------------------------
+// ⚙️ CORS Configuration
 // ------------------------
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -54,7 +67,7 @@ if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
 }
 
-// Multer config for file uploads (images, audio, video)
+// Multer setup for file uploads (images, videos, audio)
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
@@ -67,12 +80,21 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // ------------------------
-// 🧩 WebSocket Setup
+// 🧠 WebSocket Server Setup
 // ------------------------
 const wss = new WebSocket.Server({ noServer: true });
 const clients = new Map();
 
-// Handle WebSocket connections
+// ✅ Add headers to WebSocket handshake for CORS
+wss.on("headers", (headers, req) => {
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    headers.push(`Access-Control-Allow-Origin: ${origin}`);
+    headers.push("Access-Control-Allow-Credentials: true");
+  }
+});
+
+// 🧩 Handle WebSocket connections
 wss.on("connection", (ws, req) => {
   console.log("🔗 New WebSocket client connected");
 
@@ -110,7 +132,7 @@ wss.on("connection", (ws, req) => {
 });
 
 // ------------------------
-// 🔄 WebSocket Upgrade Handler (CORS-safe)
+// 🔄 WebSocket Upgrade Handler (for WSS CORS Safety)
 // ------------------------
 server.on("upgrade", (req, socket, head) => {
   const origin = req.headers.origin;
@@ -136,11 +158,11 @@ app.post("/upload", upload.single("file"), (req, res) => {
   res.json({ url: fileUrl });
 });
 
-// Serve static uploaded files
+// Serve uploaded files
 app.use("/uploads", express.static(uploadDir));
 
 // ------------------------
-// 🚀 Start Server
+// 🚀 Start Relay Server
 // ------------------------
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
