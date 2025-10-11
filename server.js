@@ -1,5 +1,5 @@
 // ------------------------
-// 🌐 BlockVault Relay Server — Stable Railway Build
+// 🌐 BlockVault Relay Server (Final — Stable for Lovable + Railway)
 // ------------------------
 const express = require("express");
 const http = require("http");
@@ -10,18 +10,18 @@ const fs = require("fs");
 const cors = require("cors");
 const crypto = require("crypto");
 
+const app = express();
+const server = http.createServer(app);
+
 // ------------------------
-// 🪪 Safe UUID generator
+// 🧠 Helper: UUID
 // ------------------------
 function uuidv4() {
   return crypto.randomUUID();
 }
 
-const app = express();
-const server = http.createServer(app);
-
 // ------------------------
-// 🌍 Allowed origins (Lovable + localhost)
+// 🌍 Allowed Origins
 // ------------------------
 const allowedOrigins = [
   "https://preview--block-vault-chat.lovable.app",
@@ -29,13 +29,14 @@ const allowedOrigins = [
   "https://block-vault-chat.lovable.dev",
   "https://lovable.dev",
   "https://preview.lovable.dev",
+  "https://lovable.app",
   "http://localhost:5173",
   "http://localhost:3000"
 ];
 
 // ------------------------
-// ⚙️ HTTPS redirect (Railway requirement)
-// ------------------------
+// ⚙️ Trust Proxy + HTTPS Redirect (Railway)
+/// ------------------------
 app.enable("trust proxy");
 app.use((req, res, next) => {
   if (req.headers["x-forwarded-proto"] === "http") {
@@ -45,13 +46,25 @@ app.use((req, res, next) => {
 });
 
 // ------------------------
-// ⚙️ CORS setup
+// 🧩 CORS Setup
 // ------------------------
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.log("❌ Blocked CORS origin:", origin);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 // ------------------------
-// 📁 File uploads
+// 📁 File Uploads
 // ------------------------
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
@@ -61,26 +74,37 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const safeName = file.originalname.replace(/\s+/g, "_");
     cb(null, `${Date.now()}_${safeName}`);
-  }
+  },
 });
 
 const upload = multer({ storage });
 
 // ------------------------
-// 🧠 WebSocket server (attached directly to HTTP server)
+// ⚡ WebSocket Server
 // ------------------------
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({
+  server,
+  verifyClient: (info, done) => {
+    const origin = info.origin;
+    if (!origin || allowedOrigins.includes(origin)) {
+      done(true);
+    } else {
+      console.warn("🚫 Rejected WebSocket from:", origin);
+      done(false, 403, "Forbidden");
+    }
+  },
+});
+
 const clients = new Map();
 
 wss.on("connection", (ws, req) => {
-  console.log("🔗 New WebSocket client connected");
+  console.log("🔗 WebSocket client connected");
 
   let clientId = null;
 
   ws.on("message", (msg) => {
     try {
       const data = JSON.parse(msg);
-
       if (data.type === "register" && data.id) {
         clientId = data.id;
         clients.set(clientId, ws);
@@ -89,8 +113,7 @@ wss.on("connection", (ws, req) => {
       }
 
       if (data.to && clients.has(data.to)) {
-        const target = clients.get(data.to);
-        target.send(JSON.stringify(data));
+        clients.get(data.to).send(JSON.stringify(data));
         console.log(`📨 ${data.type} from ${data.from} → ${data.to}`);
       }
     } catch (err) {
@@ -99,30 +122,32 @@ wss.on("connection", (ws, req) => {
   });
 
   ws.on("close", () => {
-    if (clientId) {
-      clients.delete(clientId);
-      console.log(`🔴 Disconnected: ${clientId}`);
-    }
+    if (clientId) clients.delete(clientId);
+    console.log(`🔴 Client disconnected: ${clientId}`);
+  });
+
+  ws.on("error", (err) => {
+    console.error("⚠️ WebSocket error:", err.message);
   });
 });
 
 // ------------------------
-// 📤 File upload endpoint
+// 📤 Upload Endpoint
 // ------------------------
 app.post("/upload", upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
   const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
-  console.log("✅ Uploaded:", fileUrl);
+  console.log("✅ File uploaded:", fileUrl);
   res.json({ url: fileUrl });
 });
 
-// Serve static uploads
+// Serve files
 app.use("/uploads", express.static(uploadDir));
 
 // ------------------------
-// 🚀 Start server
+// 🚀 Start Server
 // ------------------------
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
-  console.log(`🚀 BlockVault Relay running on port ${PORT}`);
+  console.log(`🚀 BlockVault Relay live on port ${PORT}`);
 });
