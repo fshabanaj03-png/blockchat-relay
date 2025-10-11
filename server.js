@@ -8,6 +8,7 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const cors = require("cors");
+const { v4: uuidv4 } = require("uuid");
 
 const app = express();
 const server = http.createServer(app);
@@ -47,7 +48,7 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const uniqueName = `${Date.now()}_${file.originalname.replace(/\s+/g, "_")}`;
     cb(null, uniqueName);
-  },
+  }
 });
 
 const upload = multer({ storage });
@@ -66,7 +67,7 @@ wss.on("headers", (headers, req) => {
 });
 
 wss.on("connection", (ws) => {
-  console.log("🔗 New WebSocket connection established");
+  console.log("🔗 New WebSocket client connected");
 
   let clientId = null;
 
@@ -77,12 +78,13 @@ wss.on("connection", (ws) => {
         clientId = data.id;
         clients.set(clientId, ws);
         console.log(`✅ Registered client: ${clientId}`);
+        return;
       }
 
-      // Broadcast or forward messages
       if (data.to && clients.has(data.to)) {
         const target = clients.get(data.to);
         target.send(JSON.stringify(data));
+        console.log(`📨 ${data.type} from ${data.from} → ${data.to}`);
       }
     } catch (err) {
       console.error("❌ Failed to parse message:", err);
@@ -101,15 +103,14 @@ wss.on("connection", (ws) => {
 // 📤 Upload Endpoint
 // ------------------------
 app.post("/upload", upload.single("file"), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "No file uploaded" });
-  }
+  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
   const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
   console.log("✅ File uploaded:", fileUrl);
   res.json({ url: fileUrl });
 });
 
-// Serve uploaded files publicly
+// Serve uploaded files
 app.use("/uploads", express.static(uploadDir));
 
 // ------------------------
