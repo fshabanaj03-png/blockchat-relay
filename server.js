@@ -8,7 +8,12 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const cors = require("cors");
-const { v4: uuidv4 } = require("uuid");
+const crypto = require("crypto");
+
+// Fallback uuid generator
+function uuidv4() {
+  return crypto.randomUUID();
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -39,9 +44,7 @@ app.use(cors({ origin: allowedOrigins }));
 // 📁 Uploads Configuration
 // ------------------------
 const uploadDir = path.join(__dirname, "uploads");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir);
-}
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
@@ -110,13 +113,10 @@ app.post("/upload", upload.single("file"), (req, res) => {
   res.json({ url: fileUrl });
 });
 
-// Serve uploaded files
 app.use("/uploads", express.static(uploadDir));
 
 // ------------------------
 // 🚀 Start Server
 // ------------------------
 const PORT = process.env.PORT || 8080;
-server.listen(PORT, () => {
-  console.log(`🚀 BlockVault Relay running on port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`🚀 BlockVault Relay running on port ${PORT}`));
