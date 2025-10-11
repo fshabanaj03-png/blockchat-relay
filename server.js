@@ -1,8 +1,8 @@
 // server.js
-import express from "express";
-import http from "http";
-import { WebSocketServer } from "ws";
-import cors from "cors";
+const express = require("express");
+const http = require("http");
+const { WebSocketServer } = require("ws");
+const cors = require("cors");
 
 const app = express();
 
@@ -37,7 +37,7 @@ const wss = new WebSocketServer({
     const origin = info.origin;
     console.log("🌍 Incoming WS origin:", origin);
 
-    // Allow if origin is null (sometimes from browser extensions) or matches allowed list
+    // Allow if origin is null (like extensions) or matches allowed list
     if (
       !origin ||
       allowedOrigins.some(o => origin.includes(o.replace("https://", "")))
@@ -67,7 +67,7 @@ wss.on("connection", (ws) => {
         return;
       }
 
-      // ✅ Handle messages between users
+      // ✅ Handle chat messages
       if (data.type === "message" && data.to) {
         const receiver = clients.get(data.to);
         if (receiver && receiver.readyState === receiver.OPEN) {
@@ -80,7 +80,7 @@ wss.on("connection", (ws) => {
       }
 
       // ✅ Handle call events (offer, answer, ice)
-      if (["call-offer", "call-answer", "ice-candidate"].includes(data.type)) {
+      if (["call-offer", "call-answer", "ice-candidate", "call-end"].includes(data.type)) {
         const receiver = clients.get(data.to);
         if (receiver && receiver.readyState === receiver.OPEN) {
           receiver.send(JSON.stringify(data));
@@ -88,7 +88,9 @@ wss.on("connection", (ws) => {
         } else {
           console.log(`⚠️ Call target ${data.to} not connected`);
         }
+        return;
       }
+
     } catch (err) {
       console.error("❌ Error handling message:", err);
     }
