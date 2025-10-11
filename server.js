@@ -10,7 +10,7 @@ const fs = require("fs");
 const cors = require("cors");
 const crypto = require("crypto");
 
-// Fallback uuid generator
+// Built-in UUID generator (no external uuid package)
 function uuidv4() {
   return crypto.randomUUID();
 }
@@ -19,21 +19,27 @@ const app = express();
 const server = http.createServer(app);
 
 // ------------------------
-// ✅ CORS Configuration
+// ✅ Allowed Origins (Expanded for Lovable + Local)
 // ------------------------
 const allowedOrigins = [
   "https://preview--block-vault-chat.lovable.app",
   "https://block-vault-chat.lovable.app",
+  "https://block-vault-chat.lovable.dev",
+  "https://lovable.dev",
+  "https://preview.lovable.dev",
   "http://localhost:5173",
   "http://localhost:3000"
 ];
 
+// ------------------------
+// 🌍 CORS Setup
+// ------------------------
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   next();
 });
@@ -41,15 +47,19 @@ app.use((req, res, next) => {
 app.use(cors({ origin: allowedOrigins }));
 
 // ------------------------
-// 📁 Uploads Configuration
+// 📁 Upload Directory Setup
 // ------------------------
 const uploadDir = path.join(__dirname, "uploads");
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
+}
 
+// Multer config for file uploads (images, audio, video)
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
-    const uniqueName = `${Date.now()}_${file.originalname.replace(/\s+/g, "_")}`;
+    const safeName = file.originalname.replace(/\s+/g, "_");
+    const uniqueName = `${Date.now()}_${safeName}`;
     cb(null, uniqueName);
   }
 });
@@ -59,17 +69,11 @@ const upload = multer({ storage });
 // ------------------------
 // 🧩 WebSocket Setup
 // ------------------------
-const wss = new WebSocket.Server({ server, path: "/", perMessageDeflate: false });
+const wss = new WebSocket.Server({ noServer: true });
 const clients = new Map();
 
-wss.on("headers", (headers, req) => {
-  const origin = req.headers.origin;
-  if (allowedOrigins.includes(origin)) {
-    headers.push(`Access-Control-Allow-Origin: ${origin}`);
-  }
-});
-
-wss.on("connection", (ws) => {
+// Handle WebSocket connections
+wss.on("connection", (ws, req) => {
   console.log("🔗 New WebSocket client connected");
 
   let clientId = null;
@@ -77,6 +81,8 @@ wss.on("connection", (ws) => {
   ws.on("message", (msg) => {
     try {
       const data = JSON.parse(msg);
+
+      // Register new client
       if (data.type === "register" && data.id) {
         clientId = data.id;
         clients.set(clientId, ws);
@@ -84,6 +90,7 @@ wss.on("connection", (ws) => {
         return;
       }
 
+      // Relay messages between users
       if (data.to && clients.has(data.to)) {
         const target = clients.get(data.to);
         target.send(JSON.stringify(data));
@@ -103,20 +110,39 @@ wss.on("connection", (ws) => {
 });
 
 // ------------------------
-// 📤 Upload Endpoint
+// 🔄 WebSocket Upgrade Handler (CORS-safe)
+// ------------------------
+server.on("upgrade", (req, socket, head) => {
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+// ------------------------
+// 📤 File Upload Endpoint
 // ------------------------
 app.post("/upload", upload.single("file"), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+  if (!req.file) {
+    return res.status(400).json({ error: "No file uploaded" });
+  }
 
   const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
   console.log("✅ File uploaded:", fileUrl);
   res.json({ url: fileUrl });
 });
 
+// Serve static uploaded files
 app.use("/uploads", express.static(uploadDir));
 
 // ------------------------
 // 🚀 Start Server
 // ------------------------
 const PORT = process.env.PORT || 8080;
-server.listen(PORT, () => console.log(`🚀 BlockVault Relay running on port ${PORT}`));
+server.listen(PORT, () => {
+  console.log(`🚀 BlockVault Relay running on port ${PORT}`);
+});
