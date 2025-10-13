@@ -1,48 +1,47 @@
-import express from "express";
-import http from "http";
-import { WebSocketServer, WebSocket } from "ws";
-import cors from "cors";
-import multer from "multer";
-import path from "path";
-import { fileURLToPath } from "url";
+// ✅ BlockVault Relay Server - CommonJS version for Railway
+const express = require("express");
+const http = require("http");
+const WebSocket = require("ws");
+const cors = require("cors");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
 
-// Setup __dirname for ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
+// ─────────────── Express Setup ───────────────
 const app = express();
 app.use(express.json());
-app.use(cors({
-  origin: [
-    "https://preview--block-vault-chat.lovable.app",
-    "https://block-vault-chat.lovable.app",
-    "http://localhost:5173"
-  ],
-  methods: ["GET", "POST"],
-  allowedHeaders: ["Content-Type"],
-}));
+app.use(
+  cors({
+    origin: [
+      "https://preview--block-vault-chat.lovable.app",
+      "https://block-vault-chat.lovable.app",
+      "http://localhost:5173",
+    ],
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
 
-// ---- Multer setup for file uploads ----
+// ─────────────── File Upload Setup ───────────────
+const uploadDir = path.join(__dirname, "uploads");
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
+}
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, path.join(__dirname, "uploads"));
+    cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
     const uniqueName = `${Date.now()}_${file.originalname}`;
     cb(null, uniqueName);
-  }
+  },
 });
 
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 } // 50 MB limit
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB limit
 });
-
-// Create /uploads folder if not exists
-import fs from "fs";
-if (!fs.existsSync(path.join(__dirname, "uploads"))) {
-  fs.mkdirSync(path.join(__dirname, "uploads"));
-}
 
 // POST /upload endpoint
 app.post("/upload", upload.single("file"), (req, res) => {
@@ -62,11 +61,11 @@ app.post("/upload", upload.single("file"), (req, res) => {
 });
 
 // Serve uploaded files statically
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/uploads", express.static(uploadDir));
 
-// ---- WebSocket setup ----
+// ─────────────── HTTP + WebSocket Setup ───────────────
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+const wss = new WebSocket.Server({ server });
 
 wss.on("connection", (ws, req) => {
   console.log("🌐 New WebSocket connection from:", req.headers.origin);
@@ -75,7 +74,7 @@ wss.on("connection", (ws, req) => {
     try {
       const message = JSON.parse(data);
 
-      // Handle registration
+      // ───────── Register Client ─────────
       if (message.type === "register") {
         ws.walletAddress = message.address;
         ws.send(JSON.stringify({ type: "ack", address: message.address }));
@@ -83,9 +82,11 @@ wss.on("connection", (ws, req) => {
         return;
       }
 
-      // Forward messages to recipient
+      // ───────── Forward Messages ─────────
       if (message.to) {
-        console.log(`📨 Forwarding ${message.type} from ${message.from?.slice(0, 10)}... to ${message.to?.slice(0, 10)}...`);
+        console.log(
+          `📨 Forwarding ${message.type} from ${message.from?.slice(0, 10)} → ${message.to?.slice(0, 10)}`
+        );
 
         let delivered = false;
 
@@ -114,6 +115,12 @@ wss.on("connection", (ws, req) => {
   });
 });
 
+// ─────────────── Health Check ───────────────
+app.get("/", (req, res) => {
+  res.send("✅ BlockVault Relay is live and stable!");
+});
+
+// ─────────────── Start Server ───────────────
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
   console.log(`🚀 BlockVault Relay running on port ${PORT}`);
