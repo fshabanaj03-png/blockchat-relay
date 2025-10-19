@@ -29,29 +29,34 @@ if (!fs.existsSync(uploadDir)) {
 }
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
+  destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
-    const uniqueName = `${Date.now()}_${file.originalname}`;
-    cb(null, uniqueName);
+    const safeName = `${Date.now()}-${file.originalname.replace(/\s+/g, "_")}`;
+    cb(null, safeName);
   },
 });
 
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB limit
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB limit
 });
+
+// Serve uploaded files statically
+app.use("/uploads", express.static(uploadDir));
+
+const BASE_URL =
+  process.env.PUBLIC_URL || "https://blockchat-relay-production.up.railway.app";
 
 // POST /upload endpoint
 app.post("/upload", upload.single("file"), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "No file uploaded" });
-  }
+  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-  const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
-
-  console.log(`✅ File uploaded: ${req.file.filename} (${(req.file.size / 1024).toFixed(2)} KB)`);
+  const fileUrl = `${BASE_URL}/uploads/${req.file.filename}`;
+  console.log(
+    `✅ File uploaded: ${req.file.filename} (${(req.file.size / 1024).toFixed(
+      2
+    )} KB)`
+  );
 
   res.json({
     url: fileUrl,
@@ -60,49 +65,52 @@ app.post("/upload", upload.single("file"), (req, res) => {
   });
 });
 
-// Serve uploaded files statically
-app.use("/uploads", express.static(uploadDir));
-
 // ─────────────── HTTP + WebSocket Setup ───────────────
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
+
+// Keep track of connected clients
+const clients = new Map(); // addressLower -> ws
 
 wss.on("connection", (ws, req) => {
   console.log("🌐 New WebSocket connection from:", req.headers.origin);
 
   ws.on("message", (data) => {
     try {
-      const message = JSON.parse(data);
+      const msg = JSON.parse(data);
 
       // ───────── Register Client ─────────
-      if (message.type === "register") {
-        ws.walletAddress = message.address;
-        ws.send(JSON.stringify({ type: "ack", address: message.address }));
-        console.log(`✅ Registered: ${message.address?.slice(0, 10)}...`);
+      if (msg.type === "register" && msg.address) {
+        const addr = msg.address.toLowerCase();
+        clients.set(addr, ws);
+        ws.send(JSON.stringify({ type: "ack", address: msg.address }));
+        console.log(`✅ Registered: ${msg.address}`);
         return;
       }
 
-      // ───────── Forward Messages ─────────
-      if (message.to) {
-        console.log(
-          `📨 Forwarding ${message.type} from ${message.from?.slice(0, 10)} → ${message.to?.slice(0, 10)}`
-        );
+      // ───────── Text / Media Messages ─────────
+      if (msg.type === "message" && msg.to) {
+        const peer = clients.get(String(msg.to).toLowerCase());
+        if (peer && peer.readyState === WebSocket.OPEN) {
+          peer.send(JSON.stringify(msg));
+          console.log(`📨 Message forwarded to ${msg.to}`);
+        } else {
+          console.warn(`⚠️ Recipient not connected: ${msg.to}`);
+        }
+        return;
+      }
 
-        let delivered = false;
-
-        wss.clients.forEach((client) => {
-          if (
-            client.walletAddress?.toLowerCase() === message.to.toLowerCase() &&
-            client.readyState === WebSocket.OPEN
-          ) {
-            client.send(JSON.stringify(message));
-            delivered = true;
-            console.log(`✅ Delivered to ${message.to.slice(0, 10)}...`);
-          }
-        });
-
-        if (!delivered) {
-          console.warn(`⚠️ Recipient not connected: ${message.to}`);
+      // ───────── Call, Status, Typing, Presence ─────────
+      if (
+        /^(call-|sdp-|ice-|message-status|presence|typing)$/.test(msg.type) &&
+        msg.to
+      ) {
+        const peer = clients.get(String(msg.to).toLowerCase());
+        if (peer && peer.readyState === WebSocket.OPEN) {
+          peer.send(JSON.stringify(msg));
+          console.log(`📡 ${msg.type} forwarded to ${msg.to}`);
+        } else {
+          console.warn(`⚠️ ${msg.type} recipient not connected: ${msg.to}`);
         }
       }
     } catch (err) {
@@ -111,7 +119,8 @@ wss.on("connection", (ws, req) => {
   });
 
   ws.on("close", () => {
-    console.log("🔌 Disconnected:", ws.walletAddress);
+    for (const [k, v] of clients) if (v === ws) clients.delete(k);
+    console.log(`🔌 Disconnected: ${ws.walletAddress || "Unknown client"}`);
   });
 });
 
