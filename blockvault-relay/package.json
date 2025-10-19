@@ -1,17 +1,21 @@
 {
-  "name": "blockvault-relay",
+  "name": "blockchat-relay",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "WebSocket relay server for BlockVault Chat",
+  "main": "server.js",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
   "dependencies": {
-    "dotenv": "^17.2.2",
-    "express": "^5.1.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "multer": "^2.0.2",
+    "uuid": "^13.0.0",
     "ws": "^8.18.3"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
